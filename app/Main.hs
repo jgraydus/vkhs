@@ -13,7 +13,7 @@ mainLoop :: GLFW.Window -> DrawFrame -> IO ()
 mainLoop window drawFrame = untilM_ (GLFW.windowShouldClose window) $ do
   GLFW.pollEvents
   drawFrame
-  threadDelay 10000 -- 10 ms
+--  threadDelay 10000 -- 10 ms
 
 
 main :: IO ()

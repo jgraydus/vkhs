@@ -9,6 +9,7 @@ import qualified Data.Vector as V
 import qualified Graphics.UI.GLFW as GLFW
 import Vulkan.Core10.DeviceInitialization
 import Vulkan.Core10.LayerDiscovery
+import Vulkan.Extensions.VK_EXT_validation_features
 import Vulkan.Version
 import Vulkan.Zero
 
@@ -19,15 +20,13 @@ getValidationLayers = do
   let validationLayers = V.filter f layerProperties
   print validationLayers
   return $ layerName <$> validationLayers
-  
-
 
 getRequiredExtensions :: IO (Vector ByteString)
 getRequiredExtensions = do
   tmp <- GLFW.getRequiredInstanceExtensions
   V.fromList <$> traverse packCString tmp
 
-makeInstanceCreateInfo :: IO (InstanceCreateInfo '[])
+makeInstanceCreateInfo :: IO (InstanceCreateInfo '[ValidationFeaturesEXT])
 makeInstanceCreateInfo = do
   requiredExtensions <- getRequiredExtensions
   let appInfo :: ApplicationInfo = zero { 
@@ -38,7 +37,17 @@ makeInstanceCreateInfo = do
         apiVersion = MAKE_API_VERSION 1 0 0
       }
   validationLayers <- getValidationLayers
-  let info :: InstanceCreateInfo '[] = zero {
+  let validationFeatures = zero {
+    enabledValidationFeatures = V.fromList [
+      VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
+      VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT,
+      VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
+      VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT,
+      VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT
+    ] 
+  }
+  let info :: InstanceCreateInfo '[ValidationFeaturesEXT] = zero {
+        next = (validationFeatures, ()),
         applicationInfo = Just appInfo,
         enabledLayerNames = validationLayers,
         enabledExtensionNames = requiredExtensions 

@@ -341,6 +341,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
  
           let recordCommandBuffer imageIndex = do
                 useCommandBuffer commandBuffer zero $ do
+                  cmdSetViewport commandBuffer 0 (V.fromList [viewport])
                   let renderPassBeginInfo = RenderPassBeginInfo {
                     next = (),
                     renderPass = renderPass,
@@ -365,6 +366,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
 
           let drawFrame :: IO () = do
                waitForFences device (V.fromList [inFlightFence]) True (maxBound :: Word64)
+               resetFences device (V.fromList [inFlightFence])
                (_, imageIndex) <- acquireNextImageKHR device swapchain (maxBound :: Word64) imageAvailableSemaphore NULL_HANDLE
                resetCommandBuffer commandBuffer COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT
                recordCommandBuffer (fromIntegral imageIndex)
@@ -393,6 +395,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
           destroyCommandPool device commandPool Nothing
           V.forM_ framebuffers $ \framebuffer -> destroyFramebuffer device framebuffer Nothing
           destroyPipeline device graphicsPipeline Nothing
+          V.forM_ imageViews $ \imageView -> destroyImageView device imageView Nothing
           destroyRenderPass device renderPass Nothing
           destroyPipelineLayout device pipelineLayout Nothing
           destroyShaderModule device fragmentShaderModule Nothing
