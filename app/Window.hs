@@ -27,7 +27,7 @@ initWindow = do
   else putStrLn "GLFW vulkan NOT supported"
 
   GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
-  GLFW.windowHint $ GLFW.WindowHint'Resizable False
+  GLFW.windowHint $ GLFW.WindowHint'Resizable True
 
   Just window <- GLFW.createWindow
                    windowWidth

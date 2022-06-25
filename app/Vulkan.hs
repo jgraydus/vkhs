@@ -4,6 +4,7 @@ import Control.Monad
 import Control.Exception
 import Data.Bits
 import Data.ByteString
+import Data.IORef
 import Data.Text (Text)
 import Data.Text.Encoding
 import Data.Word
@@ -23,6 +24,7 @@ import Vulkan.Core10.DeviceInitialization
 import Vulkan.Core10.Fence
 import Vulkan.Core10.Enums.Format
 import Vulkan.Core10.Enums.ImageAspectFlagBits
+import Vulkan.Core10.Enums.Result
 import Vulkan.Core10.Enums.SharingMode
 import Vulkan.Core10.FundamentalTypes
 import Vulkan.Core10.Image
@@ -34,8 +36,10 @@ import Vulkan.Core10.PipelineLayout
 import Vulkan.Core10.Queue
 import Vulkan.Core10.QueueSemaphore
 import Vulkan.CStruct.Extends
+import Vulkan.Exception
 import Vulkan.Extensions.VK_KHR_surface
 import Vulkan.Extensions.VK_KHR_swapchain
+import Vulkan.NamedType
 import Vulkan.Version
 import Vulkan.Zero
 import VulkanInstance
@@ -225,6 +229,145 @@ renderPassCreateInfo :: RenderPassCreateInfo '[] = zero {
   dependencies = V.fromList [subpassDependency]
 }
 
+data DrawDeps = DrawDeps {
+    swapchain  :: SwapchainKHR
+  , imageViews :: Vector ImageView
+  , framebuffers :: Vector Framebuffer
+  , graphicsPipeline :: Pipeline
+  , err :: IORef Result
+  , drawFrame :: IO ()
+}
+
+createDrawDeps
+  :: PhysicalDevice
+  -> Device
+  -> SurfaceKHR
+  -> RenderPass
+  -> Vector (SomeStruct PipelineShaderStageCreateInfo)
+  -> PipelineLayout
+  -> CommandBuffer
+  -> Fence
+  -> Semaphore
+  -> Semaphore
+  -> Queue
+  -> SubmitInfo '[]
+  -> IO DrawDeps
+createDrawDeps
+  physicalDevice
+  device
+  surface
+  renderPass
+  shaderStages
+  pipelineLayout
+  commandBuffer
+  inFlightFence
+  imageAvailableSemaphore
+  renderFinishedSemaphore
+  queue
+  submitInfo = do
+
+  SurfaceCapabilitiesKHR {..} <- getPhysicalDeviceSurfaceCapabilitiesKHR physicalDevice surface
+  let Extent2D {..} = currentExtent
+
+  swapchainInfo <- makeSwapChainCreateInfoKHR physicalDevice surface
+  swapchain <- createSwapchainKHR device swapchainInfo Nothing
+
+  (_, swapchainImages) <- getSwapchainImagesKHR device swapchain
+
+  imageViews <- V.forM swapchainImages $ \image -> do
+    info <- makeImageViewCreateInfo image
+    createImageView device info Nothing
+
+  framebuffers <- V.iforM swapchainImages $ \i image -> do
+    let info :: FramebufferCreateInfo '[] = zero {
+      renderPass = renderPass,
+      attachments = V.fromList [imageViews ! i],
+      width = fromIntegral width,
+      height = fromIntegral height,
+      layers = 1
+    }
+    createFramebuffer device info Nothing
+
+  let viewport :: Viewport = zero {
+    x = 0.0,
+    y = 0.0,
+    width = fromIntegral width,
+    height = fromIntegral height,
+    minDepth = 0.0,
+    maxDepth = 1.0
+  }
+  let scissor :: Rect2D = zero { offset = zero, extent = currentExtent }
+  let viewportState :: PipelineViewportStateCreateInfo '[] = zero {
+    viewports = V.fromList [viewport],
+    scissors = V.fromList [scissor]
+  }
+
+  let pipelineInfo :: GraphicsPipelineCreateInfo '[] = zero {
+    stages = shaderStages,
+    vertexInputState = Just (SomeStruct vertexInputInfo),
+    inputAssemblyState = Just inputAssembly,
+    viewportState = Just (SomeStruct viewportState),
+    rasterizationState = Just (SomeStruct rasterizer),
+    multisampleState = Just (SomeStruct multisampling),
+    depthStencilState = Just depthStencil,
+    colorBlendState = Just (SomeStruct colorBlending),
+    dynamicState = Just dynamicState',
+    layout = pipelineLayout,
+    renderPass = renderPass,
+    subpass = 0
+  }
+
+  (_, pipelines) <- createGraphicsPipelines
+                        device
+                        NULL_HANDLE
+                        (V.fromList [SomeStruct pipelineInfo])
+                        Nothing
+
+  let graphicsPipeline = pipelines ! 0
+ 
+  let recordCommandBuffer imageIndex = do
+        useCommandBuffer commandBuffer zero $ do
+          cmdSetViewport commandBuffer 0 (V.fromList [viewport])
+          let renderPassBeginInfo = RenderPassBeginInfo {
+            next = (),
+            renderPass = renderPass,
+            framebuffer = framebuffers ! imageIndex,
+            renderArea = zero { offset = zero, extent = currentExtent },
+            clearValues = V.fromList [zero]
+          }
+          cmdUseRenderPass commandBuffer renderPassBeginInfo SUBPASS_CONTENTS_INLINE $ do
+            cmdBindPipeline commandBuffer PIPELINE_BIND_POINT_GRAPHICS graphicsPipeline
+            cmdDraw commandBuffer 3 1 0 0
+
+  err <- newIORef SUCCESS
+
+  let drawFrame' :: IO () = do
+       waitForFences device (V.fromList [inFlightFence]) True (maxBound :: Word64)
+       resetFences device (V.fromList [inFlightFence])
+       (_, imageIndex) <- acquireNextImageKHR device swapchain (maxBound :: Word64) imageAvailableSemaphore NULL_HANDLE
+       resetCommandBuffer commandBuffer COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT
+       recordCommandBuffer (fromIntegral imageIndex)
+       queueSubmit queue (V.fromList [SomeStruct submitInfo]) inFlightFence
+       let presentInfo = zero {
+         waitSemaphores = V.fromList [renderFinishedSemaphore],
+         swapchains = V.fromList [swapchain],
+         imageIndices = V.fromList [imageIndex]
+       }
+       queuePresentKHR queue presentInfo
+       return ()
+
+  let drawFrame = drawFrame' `catch` \(e :: VulkanException) -> writeIORef err (vulkanExceptionResult e)
+
+  return $ DrawDeps {..}
+
+destroyDrawDeps :: Device -> DrawDeps -> IO ()
+destroyDrawDeps device DrawDeps {..} = do
+  destroyPipeline device graphicsPipeline Nothing
+  V.forM_ framebuffers $ \framebuffer -> destroyFramebuffer device framebuffer Nothing
+  V.forM_ imageViews $ \imageView -> destroyImageView device imageView Nothing
+  destroySwapchainKHR device swapchain Nothing
+  return ()
+
 
 type DrawFrame = IO ()
 
@@ -240,180 +383,103 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
       let cleanup i = putStrLn "Vulkan: destroyed device" >> cleanup' i
       bracket create cleanup $ \device -> do
         queue <- getDeviceQueue device i 0
-        withSwapchain physicalDevice device surface $ \swapchain -> do
-          -- TODO probably should check the Result value
-          (_, swapchainImages) <- getSwapchainImagesKHR device swapchain
 
-          imageViews <- V.forM swapchainImages $ \image -> do
-            info <- makeImageViewCreateInfo image
-            createImageView device info Nothing
+        -- shaders
+        vertexShaderModule <- createShaderModule device (zero { code = exampleVertexShader }) Nothing
+        fragmentShaderModule <- createShaderModule device (zero { code = exampleFragmentShader }) Nothing
 
-          -- shaders
-          vertexShaderModule <- createShaderModule device (zero { code = exampleVertexShader }) Nothing
-          fragmentShaderModule <- createShaderModule device (zero { code = exampleFragmentShader }) Nothing
+        let shaderStages :: Vector (SomeStruct PipelineShaderStageCreateInfo) = 
+              V.fromList [
+                SomeStruct $ zero {
+                  stage = SHADER_STAGE_VERTEX_BIT,
+                  module' = vertexShaderModule,
+                  name = "main"
+                },
+                SomeStruct $ zero {
+                  stage = SHADER_STAGE_FRAGMENT_BIT,
+                  module' = fragmentShaderModule,
+                  name = "main"
+                }
+              ]
 
-          let shaderStages :: Vector (SomeStruct PipelineShaderStageCreateInfo) = 
-                V.fromList [
-                  SomeStruct $ zero {
-                    stage = SHADER_STAGE_VERTEX_BIT,
-                    module' = vertexShaderModule,
-                    name = "main"
-                  },
-                  SomeStruct $ zero {
-                    stage = SHADER_STAGE_FRAGMENT_BIT,
-                    module' = fragmentShaderModule,
-                    name = "main"
-                  }
-                ]
+        pipelineLayout <- createPipelineLayout device zero Nothing
+        renderPass <- createRenderPass device renderPassCreateInfo Nothing
 
-          SurfaceCapabilitiesKHR {..} <- getPhysicalDeviceSurfaceCapabilitiesKHR physicalDevice surface
-          let Extent2D {..} = currentExtent
-          let viewport :: Viewport = zero {
-            x = 0.0,
-            y = 0.0,
-            width = fromIntegral width,
-            height = fromIntegral height,
-            minDepth = 0.0,
-            maxDepth = 1.0
-          }
-          let scissor :: Rect2D = zero { offset = zero, extent = currentExtent }
-          let viewportState :: PipelineViewportStateCreateInfo '[] = zero {
-            viewports = V.fromList [viewport],
-            scissors = V.fromList [scissor]
-          }
+        let commandPoolCreateInfo = CommandPoolCreateInfo {
+          flags = COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+          queueFamilyIndex = i
+        }
 
-          pipelineLayout <- createPipelineLayout device zero Nothing
-          
-          renderPass <- createRenderPass device renderPassCreateInfo Nothing
+        commandPool <- createCommandPool
+                          device
+                          commandPoolCreateInfo
+                          Nothing
 
-          let pipelineInfo :: GraphicsPipelineCreateInfo '[] = zero {
-            stages = shaderStages,
-            vertexInputState = Just (SomeStruct vertexInputInfo),
-            inputAssemblyState = Just inputAssembly,
-            viewportState = Just (SomeStruct viewportState),
-            rasterizationState = Just (SomeStruct rasterizer),
-            multisampleState = Just (SomeStruct multisampling),
-            depthStencilState = Just depthStencil,
-            colorBlendState = Just (SomeStruct colorBlending),
-            dynamicState = Just dynamicState',
-            layout = pipelineLayout,
-            renderPass = renderPass,
-            subpass = 0
-          }
+        let allocInfo :: CommandBufferAllocateInfo = zero {
+          commandPool = commandPool,
+          level = COMMAND_BUFFER_LEVEL_PRIMARY,
+          commandBufferCount = 1
+        }
 
-          (_, pipelines) <- createGraphicsPipelines
-                                device
-                                NULL_HANDLE
-                                (V.fromList [SomeStruct pipelineInfo])
-                                Nothing
+        commandBuffers <- allocateCommandBuffers device allocInfo
 
-          let graphicsPipeline = pipelines ! 0
+        let commandBuffer = commandBuffers ! 0
 
-          framebuffers <- V.iforM swapchainImages $ \i image -> do
-            let info :: FramebufferCreateInfo '[] = zero {
-              renderPass = renderPass,
-              attachments = V.fromList [imageViews ! i],
-              width = fromIntegral width,
-              height = fromIntegral height,
-              layers = 1
-            }
-            createFramebuffer device info Nothing
+        imageAvailableSemaphore <- createSemaphore device zero Nothing
+        renderFinishedSemaphore <- createSemaphore device zero Nothing
+        inFlightFence <- createFence device (FenceCreateInfo { next = (), flags = FENCE_CREATE_SIGNALED_BIT }) Nothing
 
-          let commandPoolCreateInfo = CommandPoolCreateInfo {
-            flags = COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            queueFamilyIndex = i
-          }
+        let submitInfo = zero {
+          waitSemaphores = V.fromList [imageAvailableSemaphore],
+          waitDstStageMask = V.fromList [PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT],
+          commandBuffers = V.fromList [commandBufferHandle commandBuffer],
+          signalSemaphores = V.fromList [renderFinishedSemaphore]
+        }
 
-          commandPool <- createCommandPool
-                            device
-                            commandPoolCreateInfo
-                            Nothing
+        let makeDrawDeps = createDrawDeps 
+                             physicalDevice
+                             device
+                             surface
+                             renderPass
+                             shaderStages
+                             pipelineLayout
+                             commandBuffer
+                             inFlightFence
+                             imageAvailableSemaphore
+                             renderFinishedSemaphore
+                             queue
+                             submitInfo
 
-          let allocInfo :: CommandBufferAllocateInfo = zero {
-            commandPool = commandPool,
-            level = COMMAND_BUFFER_LEVEL_PRIMARY,
-            commandBufferCount = 1
-          }
+        drawDepsRef <- makeDrawDeps >>= newIORef
 
-          commandBuffers <- allocateCommandBuffers device allocInfo
+        let draw :: IO () = do
+             d@DrawDeps {..} <- readIORef drawDepsRef
+             e <- readIORef err
+             if e == SUCCESS
+             then do
+               drawFrame
+             else do
+               deviceWaitIdle device
+               destroyDrawDeps device d
+               drawDeps <- makeDrawDeps
+               writeIORef drawDepsRef drawDeps
+               writeIORef err SUCCESS
 
-          let commandBuffer = commandBuffers ! 0
- 
-          let recordCommandBuffer imageIndex = do
-                useCommandBuffer commandBuffer zero $ do
-                  cmdSetViewport commandBuffer 0 (V.fromList [viewport])
-                  let renderPassBeginInfo = RenderPassBeginInfo {
-                    next = (),
-                    renderPass = renderPass,
-                    framebuffer = framebuffers ! imageIndex,
-                    renderArea = zero { offset = zero, extent = currentExtent },
-                    clearValues = V.fromList [zero]
-                  }
-                  cmdUseRenderPass commandBuffer renderPassBeginInfo SUBPASS_CONTENTS_INLINE $ do
-                    cmdBindPipeline commandBuffer PIPELINE_BIND_POINT_GRAPHICS graphicsPipeline
-                    cmdDraw commandBuffer 3 1 0 0
+        result <- f draw
 
-          imageAvailableSemaphore <- createSemaphore device zero Nothing
-          renderFinishedSemaphore <- createSemaphore device zero Nothing
-          inFlightFence <- createFence device (FenceCreateInfo { next = (), flags = FENCE_CREATE_SIGNALED_BIT }) Nothing
+        -- cleanup
+        deviceWaitIdle device
+        drawDeps <- readIORef drawDepsRef
+        destroyDrawDeps device drawDeps
+        destroyFence device inFlightFence Nothing
+        destroySemaphore device imageAvailableSemaphore Nothing
+        destroySemaphore device renderFinishedSemaphore Nothing
+        freeCommandBuffers device commandPool commandBuffers 
+        destroyCommandPool device commandPool Nothing
+        destroyRenderPass device renderPass Nothing
+        destroyPipelineLayout device pipelineLayout Nothing
+        destroyShaderModule device fragmentShaderModule Nothing
+        destroyShaderModule device vertexShaderModule Nothing
 
-          let submitInfo = zero {
-            waitSemaphores = V.fromList [imageAvailableSemaphore],
-            waitDstStageMask = V.fromList [PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT],
-            commandBuffers = V.fromList [commandBufferHandle commandBuffer],
-            signalSemaphores = V.fromList [renderFinishedSemaphore]
-          }
-
-          let drawFrame :: IO () = do
-               waitForFences device (V.fromList [inFlightFence]) True (maxBound :: Word64)
-               resetFences device (V.fromList [inFlightFence])
-               (_, imageIndex) <- acquireNextImageKHR device swapchain (maxBound :: Word64) imageAvailableSemaphore NULL_HANDLE
-               resetCommandBuffer commandBuffer COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT
-               recordCommandBuffer (fromIntegral imageIndex)
-               queueSubmit queue (V.fromList [SomeStruct submitInfo]) inFlightFence
-               let presentInfo = zero {
-                 waitSemaphores = V.fromList [renderFinishedSemaphore],
-                 swapchains = V.fromList [swapchain],
-                 imageIndices = V.fromList [imageIndex]
-               }
-               queuePresentKHR queue presentInfo
-               return ()
-
-
-
-          -- TODO stuff here
-          result <- f drawFrame
-
-
-
-          -- cleanup
-          deviceWaitIdle device
-          destroyFence device inFlightFence Nothing
-          destroySemaphore device imageAvailableSemaphore Nothing
-          destroySemaphore device renderFinishedSemaphore Nothing
-          freeCommandBuffers device commandPool commandBuffers 
-          destroyCommandPool device commandPool Nothing
-          V.forM_ framebuffers $ \framebuffer -> destroyFramebuffer device framebuffer Nothing
-          destroyPipeline device graphicsPipeline Nothing
-          V.forM_ imageViews $ \imageView -> destroyImageView device imageView Nothing
-          destroyRenderPass device renderPass Nothing
-          destroyPipelineLayout device pipelineLayout Nothing
-          destroyShaderModule device fragmentShaderModule Nothing
-          destroyShaderModule device vertexShaderModule Nothing
-
-
-          return result
-          
-          
-
-
-
-
-
-
-
-
-
-
-
+        return result
   
