@@ -5,6 +5,7 @@ import Control.Exception
 import Data.Bits
 import Data.ByteString
 import Data.IORef
+import qualified Data.StorableVector as SV
 import Data.Text (Text)
 import Data.Text.Encoding
 import Data.Word
@@ -12,10 +13,13 @@ import Data.Vector ((!), Vector)
 import qualified Data.Vector as V
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Ptr (castPtr, nullPtr, Ptr)
-import Foreign.Storable (peek)
+import Foreign.Storable (peek,poke)
+import GHC.Records
 import qualified Graphics.UI.GLFW as GLFW
 import Shaders
+import Vertex
 import Vulkan.Core10.APIConstants
+import Vulkan.Core10.Buffer
 import Vulkan.Core10.CommandBuffer
 import Vulkan.Core10.CommandBufferBuilding
 import Vulkan.Core10.CommandPool
@@ -29,6 +33,8 @@ import Vulkan.Core10.Enums.SharingMode
 import Vulkan.Core10.FundamentalTypes
 import Vulkan.Core10.Image
 import Vulkan.Core10.ImageView
+import Vulkan.Core10.Memory
+import Vulkan.Core10.MemoryManagement
 import Vulkan.Core10.Pass
 import Vulkan.Core10.Shader
 import Vulkan.Core10.Pipeline
@@ -152,8 +158,6 @@ rasterizer :: PipelineRasterizationStateCreateInfo '[] = zero {
   depthBiasClamp = 0.0,
   depthBiasSlopeFactor = 0.0
 }
- 
-vertexInputInfo :: PipelineVertexInputStateCreateInfo '[] = zero
 
 inputAssembly :: PipelineInputAssemblyStateCreateInfo = zero {
   topology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
@@ -247,10 +251,11 @@ createDrawDeps
   -> PipelineLayout
   -> CommandBuffer
   -> Fence
-  -> Semaphore
-  -> Semaphore
+  -> "imageAvailable" ::: Semaphore
+  -> "renderFinished" ::: Semaphore
   -> Queue
   -> SubmitInfo '[]
+  -> "vertexBuffer" ::: Buffer
   -> IO DrawDeps
 createDrawDeps
   physicalDevice
@@ -264,7 +269,8 @@ createDrawDeps
   imageAvailableSemaphore
   renderFinishedSemaphore
   queue
-  submitInfo = do
+  submitInfo
+  vertexBuffer = do
 
   SurfaceCapabilitiesKHR {..} <- getPhysicalDeviceSurfaceCapabilitiesKHR physicalDevice surface
   let Extent2D {..} = currentExtent
@@ -337,6 +343,7 @@ createDrawDeps
           }
           cmdUseRenderPass commandBuffer renderPassBeginInfo SUBPASS_CONTENTS_INLINE $ do
             cmdBindPipeline commandBuffer PIPELINE_BIND_POINT_GRAPHICS graphicsPipeline
+            cmdBindVertexBuffers commandBuffer 0 (V.fromList [vertexBuffer]) (V.fromList [0])
             cmdDraw commandBuffer 3 1 0 0
 
   err <- newIORef SUCCESS
@@ -402,6 +409,37 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
                 }
               ]
 
+        -- vertex buffer
+        vertexBuffer <- createBuffer device vertexBufferCreateInfo Nothing
+
+        memoryRequirements <- getBufferMemoryRequirements device vertexBuffer
+        PhysicalDeviceMemoryProperties {..} <- getPhysicalDeviceMemoryProperties physicalDevice
+
+        let r (idx, memoryType) = cond1 && cond2
+                where
+                  -- we can use the ith memory type
+                  cond1 = testBit (memoryTypeBits memoryRequirements) idx
+                  -- the ith memory type is the correct type of memory for out buffer
+                  cond2 = popCount (propertyFlags memoryType .&. requiredFlags) > 0
+                  requiredFlags = MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT
+
+        let Just j = V.findIndex r (V.indexed memoryTypes)
+
+        let allocInfo :: MemoryAllocateInfo '[] = zero {
+          next = (),
+          allocationSize = getField @"size" memoryRequirements,
+          memoryTypeIndex = fromIntegral j         
+        }
+
+        vertexBufferMemory <- allocateMemory device allocInfo Nothing
+
+        bindBufferMemory device vertexBuffer vertexBufferMemory 0
+
+        ptr <- mapMemory device vertexBufferMemory 0 (getField @"size" memoryRequirements) zero
+
+        SV.poke (castPtr ptr :: Ptr Vertex) vertices
+
+
         pipelineLayout <- createPipelineLayout device zero Nothing
         renderPass <- createRenderPass device renderPassCreateInfo Nothing
 
@@ -449,6 +487,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
                              renderFinishedSemaphore
                              queue
                              submitInfo
+                             vertexBuffer
 
         drawDepsRef <- makeDrawDeps >>= newIORef
 
@@ -478,6 +517,9 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
         destroyCommandPool device commandPool Nothing
         destroyRenderPass device renderPass Nothing
         destroyPipelineLayout device pipelineLayout Nothing
+        unmapMemory device vertexBufferMemory
+        freeMemory device vertexBufferMemory Nothing
+        destroyBuffer device vertexBuffer Nothing
         destroyShaderModule device fragmentShaderModule Nothing
         destroyShaderModule device vertexShaderModule Nothing
 

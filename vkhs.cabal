@@ -7,13 +7,18 @@ executable vkhs
     other-modules:
         Shaders,
         Utils,
+        Vertex,
         Vulkan,
         VulkanInstance,
         Window
     build-depends:
         base ^>=4.16.1.0,
         bytestring,
+        containers,
+        derive-storable,
+        fixed-vector,
         GLFW-b,
+        storablevector,
         text,
         vector,
         vulkan,
@@ -26,5 +31,6 @@ executable vkhs
         OverloadedStrings,
         RecordWildCards,
         ScopedTypeVariables,
+        TypeApplications,
         TypeOperators
 
