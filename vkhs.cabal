@@ -5,6 +5,7 @@ version:            0.1.0.0
 executable vkhs
     main-is:          Main.hs
     other-modules:
+        Buffer,
         Shaders,
         Utils,
         Vertex,

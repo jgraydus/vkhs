@@ -1,5 +1,6 @@
 module Vulkan where
 
+import Buffer
 import Control.Monad
 import Control.Exception
 import Data.Bits
@@ -410,35 +411,14 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
               ]
 
         -- vertex buffer
-        vertexBuffer <- createBuffer device vertexBufferCreateInfo Nothing
+        (vertexBuffer, vertexBufferMemory, vertexBufferPtr) <- makeBuffer
+           physicalDevice
+           device
+           vertexBufferSize
+           BUFFER_USAGE_VERTEX_BUFFER_BIT
+           (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
-        memoryRequirements <- getBufferMemoryRequirements device vertexBuffer
-        PhysicalDeviceMemoryProperties {..} <- getPhysicalDeviceMemoryProperties physicalDevice
-
-        let r (idx, memoryType) = cond1 && cond2
-                where
-                  -- we can use the ith memory type
-                  cond1 = testBit (memoryTypeBits memoryRequirements) idx
-                  -- the ith memory type is the correct type of memory for out buffer
-                  cond2 = popCount (propertyFlags memoryType .&. requiredFlags) > 0
-                  requiredFlags = MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT
-
-        let Just j = V.findIndex r (V.indexed memoryTypes)
-
-        let allocInfo :: MemoryAllocateInfo '[] = zero {
-          next = (),
-          allocationSize = getField @"size" memoryRequirements,
-          memoryTypeIndex = fromIntegral j         
-        }
-
-        vertexBufferMemory <- allocateMemory device allocInfo Nothing
-
-        bindBufferMemory device vertexBuffer vertexBufferMemory 0
-
-        ptr <- mapMemory device vertexBufferMemory 0 (getField @"size" memoryRequirements) zero
-
-        SV.poke (castPtr ptr :: Ptr Vertex) vertices
-
+        SV.poke (castPtr vertexBufferPtr :: Ptr Vertex) vertices
 
         pipelineLayout <- createPipelineLayout device zero Nothing
         renderPass <- createRenderPass device renderPassCreateInfo Nothing
@@ -517,9 +497,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
         destroyCommandPool device commandPool Nothing
         destroyRenderPass device renderPass Nothing
         destroyPipelineLayout device pipelineLayout Nothing
-        unmapMemory device vertexBufferMemory
-        freeMemory device vertexBufferMemory Nothing
-        destroyBuffer device vertexBuffer Nothing
+        releaseBuffer device vertexBuffer vertexBufferMemory
         destroyShaderModule device fragmentShaderModule Nothing
         destroyShaderModule device vertexShaderModule Nothing
 

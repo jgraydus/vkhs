@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module Vertex (
   Vertex,
-  vertexBufferCreateInfo,
+  vertexBufferSize,
   vertexInputInfo,
   vertices
 )where
@@ -15,6 +15,7 @@ import qualified Data.StorableVector as SV
 import qualified Data.Vector as V
 import Data.Vector.Fixed (mk2, mk4)
 import Data.Vector.Fixed.Storable
+import Data.Word (Word64)
 import Foreign.Storable.Generic
 import Foreign.Storable.Generic.Internal
 import Foreign.Storable.Generic.Tools (calcOffsets)
@@ -73,9 +74,5 @@ vertexInputInfo :: PipelineVertexInputStateCreateInfo '[] = zero {
   vertexAttributeDescriptions = V.fromList [posDesc, colorDesc]
 }
 
-vertexBufferCreateInfo :: BufferCreateInfo '[] = zero {
-  size = fromIntegral $ sizeOf (undefined :: Vertex) * SV.length vertices,
-  usage = BUFFER_USAGE_VERTEX_BUFFER_BIT,
-  sharingMode = SHARING_MODE_EXCLUSIVE
-}
+vertexBufferSize :: Word64 = fromIntegral $ sizeOf (undefined :: Vertex) * SV.length vertices
 
