@@ -5,7 +5,6 @@ import Data.Bits (testBit, popCount, (.&.))
 import Data.Vector ((!), Vector)
 import Data.Word (Word32)
 import qualified Data.Vector as V
-import Foreign.Ptr (Ptr)
 import GHC.Records
 import Vulkan.Core10.Buffer (
   Buffer,
@@ -27,8 +26,7 @@ import Vulkan.Core10.Memory (
   allocateMemory,
   freeMemory,
   mapMemory,
-  MemoryAllocateInfo(..),
-  unmapMemory)
+  MemoryAllocateInfo(..))
 import Vulkan.Core10.MemoryManagement (
   bindBufferMemory,
   getBufferMemoryRequirements,
@@ -60,7 +58,7 @@ makeBuffer
   -> "bufferSize" ::: DeviceSize
   -> BufferUsageFlags
   -> MemoryPropertyFlags
-  -> IO (Buffer, DeviceMemory, Ptr ())
+  -> IO (Buffer, DeviceMemory)
 makeBuffer physicalDevice device bufferSize bufferUsageFlags memoryPropertyFlags = do
   let bufferCreateInfo :: BufferCreateInfo '[] = zero {
     size = bufferSize,
@@ -79,13 +77,11 @@ makeBuffer physicalDevice device bufferSize bufferUsageFlags memoryPropertyFlags
 
   bufferMemory <- allocateMemory device allocInfo Nothing
   bindBufferMemory device buffer bufferMemory 0
-  ptr <- mapMemory device bufferMemory 0 (getField @"size" memoryRequirements) zero
 
-  return (buffer, bufferMemory, ptr)
+  return (buffer, bufferMemory)
 
 releaseBuffer :: Device -> Buffer -> DeviceMemory -> IO ()
 releaseBuffer device buffer bufferMemory = do
-  unmapMemory device bufferMemory
   freeMemory device bufferMemory Nothing
   destroyBuffer device buffer Nothing
 

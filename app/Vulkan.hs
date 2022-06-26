@@ -376,6 +376,38 @@ destroyDrawDeps device DrawDeps {..} = do
   destroySwapchainKHR device swapchain Nothing
   return ()
 
+copyBuffer
+  :: Device
+  -> Queue
+  -> CommandPool
+  -> "srcBuffer" ::: Buffer
+  -> "dstBuffer" ::: Buffer
+  -> "size" ::: DeviceSize
+  -> IO ()
+copyBuffer device queue commandPool srcBuffer dstBuffer size = do
+  cbs <- allocateCommandBuffers device $ zero {
+    level = COMMAND_BUFFER_LEVEL_PRIMARY,
+    commandPool = commandPool,
+    commandBufferCount = 1
+  }
+  let copyRegion :: BufferCopy = zero {
+    srcOffset = 0,
+    dstOffset = 0,
+    size = size
+  }
+  let cbbi = CommandBufferBeginInfo {
+    next = (),
+    flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    inheritanceInfo = Nothing
+  }
+  useCommandBuffer (cbs ! 0) cbbi $ do
+    cmdCopyBuffer (cbs ! 0) srcBuffer dstBuffer (V.fromList [copyRegion])
+  let submitInfo :: SubmitInfo '[] = zero { commandBuffers = commandBufferHandle <$> cbs }
+  queueSubmit queue (V.fromList [ SomeStruct submitInfo ]) NULL_HANDLE
+  queueWaitIdle queue
+  freeCommandBuffers device commandPool cbs
+  return ()
+  
 
 type DrawFrame = IO ()
 
@@ -410,19 +442,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
                 }
               ]
 
-        -- vertex buffer
-        (vertexBuffer, vertexBufferMemory, vertexBufferPtr) <- makeBuffer
-           physicalDevice
-           device
-           vertexBufferSize
-           BUFFER_USAGE_VERTEX_BUFFER_BIT
-           (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
-
-        SV.poke (castPtr vertexBufferPtr :: Ptr Vertex) vertices
-
-        pipelineLayout <- createPipelineLayout device zero Nothing
-        renderPass <- createRenderPass device renderPassCreateInfo Nothing
-
+        -- command pool
         let commandPoolCreateInfo = CommandPoolCreateInfo {
           flags = COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
           queueFamilyIndex = i
@@ -432,6 +452,37 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
                           device
                           commandPoolCreateInfo
                           Nothing
+
+        -- vertex buffer
+        (stagingBuffer, stagingBufferMemory) <- makeBuffer
+           physicalDevice
+           device
+           vertexBufferSize
+           BUFFER_USAGE_TRANSFER_SRC_BIT
+           (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+        (vertexBuffer, vertexBufferMemory) <- makeBuffer
+           physicalDevice
+           device
+           vertexBufferSize
+           (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
+           MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+
+        ptr <- mapMemory device stagingBufferMemory 0 vertexBufferSize zero
+        SV.poke (castPtr ptr :: Ptr Vertex) vertices
+        unmapMemory device stagingBufferMemory
+
+        copyBuffer
+          device
+          queue
+          commandPool
+          stagingBuffer
+          vertexBuffer
+          vertexBufferSize
+
+        -- 
+        pipelineLayout <- createPipelineLayout device zero Nothing
+        renderPass <- createRenderPass device renderPassCreateInfo Nothing
 
         let allocInfo :: CommandBufferAllocateInfo = zero {
           commandPool = commandPool,
@@ -498,6 +549,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
         destroyRenderPass device renderPass Nothing
         destroyPipelineLayout device pipelineLayout Nothing
         releaseBuffer device vertexBuffer vertexBufferMemory
+        releaseBuffer device stagingBuffer stagingBufferMemory
         destroyShaderModule device fragmentShaderModule Nothing
         destroyShaderModule device vertexShaderModule Nothing
 
