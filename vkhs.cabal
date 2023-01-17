@@ -13,7 +13,7 @@ executable vkhs
         VulkanInstance,
         Window
     build-depends:
-        base ^>=4.16.1.0,
+        base ^>=4.17.0.0,
         bytestring,
         containers,
         derive-storable,

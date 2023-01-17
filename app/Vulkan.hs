@@ -349,9 +349,11 @@ createDrawDeps
 
   err <- newIORef SUCCESS
 
+  let fences = V.fromList [inFlightFence]
+
   let drawFrame' :: IO () = do
-       waitForFences device (V.fromList [inFlightFence]) True (maxBound :: Word64)
-       resetFences device (V.fromList [inFlightFence])
+       waitForFences device fences True (maxBound :: Word64)
+       resetFences device fences
        (_, imageIndex) <- acquireNextImageKHR device swapchain (maxBound :: Word64) imageAvailableSemaphore NULL_HANDLE
        resetCommandBuffer commandBuffer COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT
        recordCommandBuffer (fromIntegral imageIndex)
