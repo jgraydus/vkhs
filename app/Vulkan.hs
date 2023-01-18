@@ -257,6 +257,7 @@ createDrawDeps
   -> Queue
   -> SubmitInfo '[]
   -> "vertexBuffer" ::: Buffer
+  -> "indexBuffer"  ::: Buffer
   -> IO DrawDeps
 createDrawDeps
   physicalDevice
@@ -271,7 +272,8 @@ createDrawDeps
   renderFinishedSemaphore
   queue
   submitInfo
-  vertexBuffer = do
+  vertexBuffer
+  indexBuffer = do
 
   SurfaceCapabilitiesKHR {..} <- getPhysicalDeviceSurfaceCapabilitiesKHR physicalDevice surface
   let Extent2D {..} = currentExtent
@@ -345,7 +347,8 @@ createDrawDeps
           cmdUseRenderPass commandBuffer renderPassBeginInfo SUBPASS_CONTENTS_INLINE $ do
             cmdBindPipeline commandBuffer PIPELINE_BIND_POINT_GRAPHICS graphicsPipeline
             cmdBindVertexBuffers commandBuffer 0 (V.fromList [vertexBuffer]) (V.fromList [0])
-            cmdDraw commandBuffer 3 1 0 0
+            cmdBindIndexBuffer commandBuffer indexBuffer 0 INDEX_TYPE_UINT16
+            cmdDrawIndexed commandBuffer 6 1 0 0 0
 
   err <- newIORef SUCCESS
 
@@ -456,32 +459,67 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
                           Nothing
 
         -- vertex buffer
-        (stagingBuffer, stagingBufferMemory) <- makeBuffer
-           physicalDevice
-           device
-           vertexBufferSize
-           BUFFER_USAGE_TRANSFER_SRC_BIT
-           (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        (vertexBuffer, vertexBufferMemory) <- do
+          (stagingBuffer, stagingBufferMemory) <- makeBuffer
+             physicalDevice
+             device
+             vertexBufferSize
+             BUFFER_USAGE_TRANSFER_SRC_BIT
+             (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+  
+          (vertexBuffer, vertexBufferMemory) <- makeBuffer
+             physicalDevice
+             device
+             vertexBufferSize
+             (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
+             MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+  
+          ptr <- mapMemory device stagingBufferMemory 0 vertexBufferSize zero
+          SV.poke (castPtr ptr :: Ptr Vertex) vertices
+          unmapMemory device stagingBufferMemory
+  
+          copyBuffer
+            device
+            queue
+            commandPool
+            stagingBuffer
+            vertexBuffer
+            vertexBufferSize
 
-        (vertexBuffer, vertexBufferMemory) <- makeBuffer
-           physicalDevice
-           device
-           vertexBufferSize
-           (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
-           MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+          releaseBuffer device stagingBuffer stagingBufferMemory
+          return (vertexBuffer, vertexBufferMemory)
 
-        ptr <- mapMemory device stagingBufferMemory 0 vertexBufferSize zero
-        SV.poke (castPtr ptr :: Ptr Vertex) vertices
-        unmapMemory device stagingBufferMemory
+        -- index buffer
+        (indexBuffer, indexBufferMemory) <- do
+          (stagingBuffer, stagingBufferMemory) <- makeBuffer
+             physicalDevice
+             device
+             indexBufferSize
+             BUFFER_USAGE_TRANSFER_SRC_BIT
+             (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+  
+          (indexBuffer, indexBufferMemory) <- makeBuffer
+             physicalDevice
+             device
+             indexBufferSize
+             (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_INDEX_BUFFER_BIT)
+             MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+  
+          ptr <- mapMemory device stagingBufferMemory 0 indexBufferSize zero
+          SV.poke (castPtr ptr :: Ptr Word16) indices
+          unmapMemory device stagingBufferMemory
+  
+          copyBuffer
+            device
+            queue
+            commandPool
+            stagingBuffer
+            indexBuffer
+            indexBufferSize
 
-        copyBuffer
-          device
-          queue
-          commandPool
-          stagingBuffer
-          vertexBuffer
-          vertexBufferSize
-
+          releaseBuffer device stagingBuffer stagingBufferMemory
+          return (indexBuffer, indexBufferMemory)
+  
         -- 
         pipelineLayout <- createPipelineLayout device zero Nothing
         renderPass <- createRenderPass device renderPassCreateInfo Nothing
@@ -521,6 +559,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
                              queue
                              submitInfo
                              vertexBuffer
+                             indexBuffer
 
         drawDepsRef <- makeDrawDeps >>= newIORef
 
@@ -551,7 +590,7 @@ withVulkan window f = withVulkanInstance $ \vkInstance -> do
         destroyRenderPass device renderPass Nothing
         destroyPipelineLayout device pipelineLayout Nothing
         releaseBuffer device vertexBuffer vertexBufferMemory
-        releaseBuffer device stagingBuffer stagingBufferMemory
+        releaseBuffer device indexBuffer indexBufferMemory
         destroyShaderModule device fragmentShaderModule Nothing
         destroyShaderModule device vertexShaderModule Nothing
 

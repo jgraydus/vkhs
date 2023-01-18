@@ -2,6 +2,8 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Vertex (
+  indices,
+  indexBufferSize,
   Vertex,
   vertexBufferSize,
   vertexInputInfo,
@@ -15,7 +17,7 @@ import qualified Data.StorableVector as SV
 import qualified Data.Vector as V
 import Data.Vector.Fixed (mk2, mk4)
 import Data.Vector.Fixed.Storable
-import Data.Word (Word64)
+import Data.Word (Word16, Word64)
 import Foreign.Storable.Generic
 import Foreign.Storable.Generic.Internal
 import Foreign.Storable.Generic.Tools (calcOffsets)
@@ -42,9 +44,10 @@ fieldOffsets = M.fromList $ zip names offsets
     rep = from (undefined :: Vertex)
 
 vertices :: SV.Vector Vertex = SV.pack
-  [ Vertex { position = mk2   0.0 (-0.5), color = mk4 1.0 0.0 0.0 0.0 }
-  , Vertex { position = mk2   0.5   0.5,  color = mk4 0.0 1.0 0.0 0.0 }
-  , Vertex { position = mk2 (-0.5)  0.5,  color = mk4 0.0 0.0 1.0 0.0 }
+  [ Vertex { position = mk2 (-0.5) (-0.5), color = mk4 1.0 0.0 0.0 0.0 }
+  , Vertex { position = mk2   0.5  (-0.5), color = mk4 0.0 1.0 0.0 0.0 }
+  , Vertex { position = mk2   0.5    0.5,  color = mk4 0.0 0.0 1.0 0.0 }
+  , Vertex { position = mk2 (-0.5)   0.5,  color = mk4 1.0 1.0 1.0 0.0 } 
   ]
 
 v = Vertex { position = mk2   0.5   0.5,  color = mk4 0.0 1.0 0.0 0.0 }
@@ -75,4 +78,8 @@ vertexInputInfo :: PipelineVertexInputStateCreateInfo '[] = zero {
 }
 
 vertexBufferSize :: Word64 = fromIntegral $ sizeOf (undefined :: Vertex) * SV.length vertices
+
+indices :: SV.Vector Word16 = SV.pack [ 0, 1, 2, 2, 3, 0 ]
+
+indexBufferSize :: Word64 = fromIntegral $ sizeOf (undefined :: Word16) * SV.length indices
 

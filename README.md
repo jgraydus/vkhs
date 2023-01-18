@@ -41,7 +41,7 @@ Just getting a feel for the Vulkan API by following the [Vulkan Tutorial](https:
   - [X] Vertex input description
   - [X] Vertex buffer creation
   - [X] Staging buffer
-  - [ ] Index buffer
+  - [X] Index buffer
 - [ ] Uniform buffers
   - [ ] Descriptor layout and buffer
   - [ ] Descriptor pool and sets
