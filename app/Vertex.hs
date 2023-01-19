@@ -28,8 +28,8 @@ import Vulkan.Core10.Pipeline
 import Vulkan.Zero
 
 data Vertex = Vertex
-  { position :: !(Vec2 Float)
-  , color    :: !(Vec4 Float)
+  { position :: {-# UNPACK #-} !(Vec2 Float)
+  , color    :: {-# UNPACK #-} !(Vec4 Float)
   } deriving (Data, Generic, Show, Typeable)
 
 instance GStorable Vertex
